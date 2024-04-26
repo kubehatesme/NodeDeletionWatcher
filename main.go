@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"syscall"
 
@@ -30,7 +29,9 @@ import (
 	"os/signal"
 	"time"
 
-	"encoding/json"
+	"log"
+
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -52,6 +53,23 @@ func (n *NodeEventHandler) OnDelete(obj interface{}) {
 
 	n.queue.Add(node.ObjectMeta.Name)
 }
+
+// func ConvertUnstructuredToNode(obj interface{}) (*apimgmtv3.Node, error) {
+// 	// 타입 어설션을 사용하여 obj를 *unstructured.Unstructured 타입으로 변환합니다.
+// 	unstructuredObj, ok := obj.(*unstructured.Unstructured)
+// 	if !ok {
+// 		return nil, fmt.Errorf("obj is not of type *unstructured.Unstructured")
+// 	}
+
+// 	// *unstructured.Unstructured 객체를 *v1.Node 타입으로 변환합니다.
+// 	node := &apimgmtv3.Node{}
+// 	err := unstructuredObj.UnmarshalJSON(unstructuredObj.Object)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to unmarshal unstructured object: %v", err)
+// 	}
+
+// 	return node, nil
+// }
 
 func main() {
 	// 홈 디렉터리에서 kubeconfig 경로 설정
@@ -100,23 +118,28 @@ func main() {
 		// 	fmt.Println("Custom resource updated")
 		// },
 		DeleteFunc: func(obj interface{}) {
-			var tmp []byte
-			var err error
-			var v3Node interface{}
-			tmp, err = obj.(*unstructured.Unstructured).MarshalJSON()
-			if err != nil {
-				return
-			}
-			err = json.Unmarshal(tmp, v3Node)
-			log.Println(v3Node)
-			v3Node2, ok := v3Node.(*apimgmtv3.Node)
+			// log.Println(obj)
+			v3Node := &apimgmtv3.Node{}
+			// err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.(map[string]interface{}), v3Node)
+			// if err != nil {
+			// 	fmt.Println("Failed to convert to CustomResourceDefinition")
+			// 	panic(err)
+			// }
+			//v3Node, err := ConvertUnstructuredToNode(obj)
+			dNode, ok := obj.(*unstructured.Unstructured)
 			if !ok {
-				fmt.Println("Failed to convert to CustomResourceDefinition")
+				log.Println("Error converting obj to unstructured ")
+			}
+			//log.Println(dNode.Object)
+			err := runtime.DefaultUnstructuredConverter.FromUnstructured(dNode.Object, v3Node)
+			if err != nil {
+				fmt.Printf("Error converting unstructured object to Node: %v\n", err)
 				return
 			}
 
-			//log.Println(obj)
-			// switch v := obj.(type) {
+			// fmt.Printf("Converted Node: %+v\n", v3Node)
+			// //log.Println(obj)
+			// switch v := v3Node.(type) {
 			// case *apimgmtv3.Node:
 			// 	fmt.Println("obj의 타입은 apimgmtv3.Node입니다.")
 			// 	// obj가 apimgmtv3.Node 타입인 경우에는 v를 사용하여 작업할 수 있습니다.
@@ -128,7 +151,8 @@ func main() {
 			// 	fmt.Println("Failed to convert to CustomResourceDefinition")
 			// 	return
 			// }
-			fmt.Printf("Custom resource %s deleted", v3Node2.Name)
+			fmt.Printf("Deleted Node's m-name: %s\n", v3Node.Name)
+			fmt.Printf("Deleted Node's real name: %s\n", v3Node.Status.NodeLabels["kubernetes.io/hostname"])
 		},
 	})
 
