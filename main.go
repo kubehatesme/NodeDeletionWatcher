@@ -2,78 +2,100 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"os/exec"
 
-	"path/filepath"
-
-	"k8s.io/client-go/rest"
+	//"path/filepath"
 
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
-	"k8s.io/client-go/util/workqueue"
+
+	//"k8s.io/client-go/util/homedir"
 
 	apimgmtv3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io"
-	//"log"
+
 	//"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	//"k8s.io/apimachinery/pkg/runtime"
+	"log"
 )
-
-// NodeEventHandler implements cache.ResourceEventHandler
-type NodeEventHandler struct {
-	queue workqueue.RateLimitingInterface
-}
-
-func (n *NodeEventHandler) OnDelete(obj interface{}) {
-	// 노드 삭제 이벤트 처리
-	//node, ok := obj.(*corev1.Node)
-	node, ok := obj.(*apimgmtv3.Node)
-	if !ok {
-		return
-	}
-	fmt.Printf("Node %s deleted\n", node.Name)
-
-	n.queue.Add(node.ObjectMeta.Name)
-}
 
 func main() {
 	// 홈 디렉터리에서 kubeconfig 경로 설정
-	var config *rest.Config
+	log.Println("node cleanup pod starting...")
+	//var config *rest.Config
 	var err error
 
-	if kubeconfigPath := os.Getenv("KUBECONFIG"); kubeconfigPath != "" {
-		//   2. kubeconfig file located by "KUBECONFIG" env
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	} else {
-		//   3. in-cluster client configuration (useful when using detek in a kubernetes cluster)
-		config, err = rest.InClusterConfig()
-	}
-	if err != nil {
-		//   4. kubeconfig file located in default directory ($HOME/.kube/config)`,
-		kubeconfigPath := filepath.Join(homedir.HomeDir(), ".kube", "config")
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	// if kubeconfigPath := os.Getenv("KUBECONFIG"); kubeconfigPath != "" {
+	// 	//   2. kubeconfig file located by "KUBECONFIG" env
+	// 	config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	// } else {
+	// 	//   3. in-cluster client configuration (useful when using detek in a kubernetes cluster)
+	// 	config, err = rest.InClusterConfig()
+	// }
+	// if err != nil {
+	// 	//   4. kubeconfig file located in default directory ($HOME/.kube/config)`,
+	// 	kubeconfigPath := filepath.Join(homedir.HomeDir(), ".kube", "config")
+	// 	config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	// }
+
+	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(),
+		&clientcmd.ConfigOverrides{},
+	)
+	nconfig, nerr := kubeconfig.ClientConfig()
+	log.Println(nconfig)
+	if nerr != nil {
+		panic(nerr)
 	}
 
-	if err != nil {
-		fmt.Printf("Error loading in-cluster configuration: %s\n", err.Error())
-		os.Exit(1)
-	}
+	// if err != nil {
+	// 	fmt.Printf("Error loading in-cluster configuration: %s\n", err.Error())
+	// 	os.Exit(1)
+	// }
+	log.Println("here...")
 
 	// 클라이언트셋 생성
-	rancherManagement, err := management.NewFactoryFromConfig(config)
+	rancherManagement, err := management.NewFactoryFromConfig(nconfig)
 	if err != nil {
 		panic(err.Error())
 	}
+	log.Println(rancherManagement)
 
 	informer := rancherManagement.Management().V3().Node().Informer()
+	log.Println(informer)
 
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		DeleteFunc: func(obj interface{}) {
+			log.Println("here2...")
 			v3Node, _ := obj.(*apimgmtv3.Node)
-			fmt.Printf("Deleted Node's m-name: %s\n", v3Node.Name)
-			fmt.Printf("Deleted Node's real name: %s\n", v3Node.Status.NodeLabels["kubernetes.io/hostname"])
-			fmt.Printf("Deleted Node's osType: %s\n", v3Node.Status.NodeLabels["osType"])
+			//[Delete h53] Set variables
+			hostName := v3Node.Status.NodeLabels["hostName"]
+			address := v3Node.Status.InternalNodeStatus.Addresses[0].Address
+			site := v3Node.Status.NodeLabels["site"][:len(v3Node.Status.NodeLabels["site"])-4]
+			zone := v3Node.Status.NodeLabels["site"][len(v3Node.Status.NodeLabels["site"])-4:]
+			url := "gitlab.arc.hcloud.io/common/rancher/-/raw/master"
+			//zone := os.Getenv("ZONE_TYPE")
+			//url := os.Getenv("SCRIPT_URL")
+
+			//[Delete EAI] Set variables
+			boxName := v3Node.Status.NodeLabels["boxName"]
+			creationTimestamp := v3Node.Status.NodeLabels["vmCreationTime"]
+			memory := v3Node.Status.NodeLabels["memory"]
+			osType := v3Node.Status.NodeLabels["osType"]
+			vCpus := v3Node.Status.NodeLabels["vCpus"]
+			projectId := "548"
+			//projectId := os.Getenv("PROJECT_ID")
+
+			cmd := fmt.Sprintf("url=%s; site=%s; curl -sfL https://$url/post-scripts/$site/cleanup.sh | VM_HOSTNAME=%s ZONE_TYPE=%s VM_IP_INFO=%s VM_HYPERVISOR=%s VM_CREATED_DATE=%s VM_MEMORY=%s OS_TYPE=%s VM_VCORE=%s PROJECT_ID=%s sh -",
+				url, site, hostName, zone, address, boxName, creationTimestamp, memory, osType, vCpus, projectId)
+			log.Println("[Command] \"", cmd, "\"")
+			output, err := exec.Command("bash", "-c", cmd, "&& sleep infinity").Output()
+			if err != nil {
+				log.Printf("error %s", err)
+			} else {
+				log.Printf("[Response] %s\n", string(output))
+			}
+			//fmt.Printf("Deleted Node's real name: %s\n", hostName)
 		},
 	})
 
